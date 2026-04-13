@@ -410,9 +410,11 @@ func (d *generalSettingsDockable) createExternalPDFCmdLineField(content *unison.
 	}
 	d.externalPDFCmdlineField.Tooltip = newWrappedTooltip(i18n.Text(`The internal PDF viewer will be used if the External PDF Viewer field is empty.
 Use $FILE where the full path to the PDF should be placed.
+Use $TEXT where the highlighted string should be placed.
 Use $PAGE where the page number should be placed.
 
-In most cases, you'll want to surround the $FILE variable with quotes.`))
+In most cases, you'll want to surround $FILE and $TEXT with quotes.
+Note that this might still fail, e.g. if the variable itself contains quotes.`))
 	content.AddChild(d.externalPDFCmdlineField)
 }
 

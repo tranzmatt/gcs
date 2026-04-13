@@ -1245,7 +1245,7 @@ func OpenFile(filePath string, initialPage int) (dockable unison.Dockable, wasOp
 		return nil, false
 	}
 	if fi.IsPDF && strings.TrimSpace(gurps.GlobalSettings().General.ExternalPDFCmdLine) != "" {
-		openExternalPDF(absPath, 1)
+		openExternalPDF(absPath, "", max(initialPage, 1))
 		return nil, false
 	}
 	var d unison.Dockable
