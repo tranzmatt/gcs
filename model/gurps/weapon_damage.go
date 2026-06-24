@@ -1,4 +1,4 @@
-// Copyright (c) 1998-2025 by Richard A. Wilkes. All rights reserved.
+// Copyright (c) 1998-2026 by Richard A. Wilkes. All rights reserved.
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, version 2.0. If a copy of the MPL was not distributed with
@@ -477,7 +477,11 @@ func (w *WeaponDamage) resolveDiceSpec(s string) (d *dice.Dice, sub bool) {
 	if d, sub = parsePotentialDiceSpec(s); d != nil {
 		return d, sub
 	}
-	value := ResolveScript(w.Owner.Entity(), deferredNewScriptWeapon(w.Owner), s)
+	var entity *Entity
+	if w.Owner != nil {
+		entity = w.Owner.Entity()
+	}
+	value := ResolveScript(entity, deferredNewScriptWeapon(w.Owner), s)
 	value = strings.TrimPrefix(strings.TrimSpace(value), "+")
 	if sub = isDiceSubtraction(value); sub {
 		value = value[1:]

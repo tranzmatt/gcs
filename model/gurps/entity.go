@@ -1,4 +1,4 @@
-// Copyright (c) 1998-2025 by Richard A. Wilkes. All rights reserved.
+// Copyright (c) 1998-2026 by Richard A. Wilkes. All rights reserved.
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, version 2.0. If a copy of the MPL was not distributed with
@@ -42,7 +42,6 @@ import (
 	"github.com/richardwilkes/toolbox/v2/i18n"
 	"github.com/richardwilkes/toolbox/v2/tid"
 	"github.com/richardwilkes/toolbox/v2/xbytes"
-	"github.com/richardwilkes/toolbox/v2/xos"
 )
 
 var (
@@ -1074,6 +1073,19 @@ func (e *Entity) BestSkillMatching(nameCriteria, specializationCriteria criteria
 	return best
 }
 
+// skillSpecializationMatches reports whether a specialization criteria matches a skill that has the given required and
+// optional specializations. A skill with a required specialization may be matched by either it or its optional
+// specialization. A skill with no required specialization is matched by its optional specialization (which is the empty
+// string for a fully unspecialized skill) - this keeps an unspecialized skill distinct from a sibling that carries an
+// optional specialization, so e.g. an "is empty" criteria matches only the truly unspecialized skill.
+func skillSpecializationMatches(specializationCriteria criteria.Text, replacements map[string]string, requiredSpecialization, optionalSpecialization string) bool {
+	if requiredSpecialization != "" {
+		return specializationCriteria.Matches(replacements, requiredSpecialization) ||
+			(optionalSpecialization != "" && specializationCriteria.Matches(replacements, optionalSpecialization))
+	}
+	return specializationCriteria.Matches(replacements, optionalSpecialization)
+}
+
 // SkillMatching returns a list of skills whose name and specialization match the given criteria.
 func (e *Entity) SkillMatching(nameCriteria, specializationCriteria criteria.Text, replacements map[string]string, requirePoints bool, excludes map[string]bool) []*Skill {
 	var list []*Skill
@@ -1081,7 +1093,8 @@ func (e *Entity) SkillMatching(nameCriteria, specializationCriteria criteria.Tex
 		if !excludes[sk.String()] {
 			if !requirePoints || sk.IsTechnique() || sk.AdjustedPoints(nil) > 0 {
 				if nameCriteria.Matches(replacements, sk.NameWithReplacements()) &&
-					(specializationCriteria.Matches(replacements, sk.SpecializationWithReplacements()) || specializationCriteria.Matches(replacements, sk.OptionalSpecializationWithReplacements())) {
+					skillSpecializationMatches(specializationCriteria, replacements,
+						sk.SpecializationWithReplacements(), sk.OptionalSpecializationWithReplacements()) {
 					list = append(list, sk)
 				}
 			}
@@ -1347,7 +1360,11 @@ func (e *Entity) Ancestry() *Ancestry {
 	}, true, false, e.Traits...)
 	if anc == nil {
 		if anc = LookupAncestry(DefaultAncestry, GlobalSettings().Libraries()); anc == nil {
-			xos.ExitIfErr(errs.New("unable to load default ancestry (Human)"))
+			// The default ancestry couldn't be loaded (e.g. a library file with the same name is present but contains
+			// invalid data). Rather than crashing, log the problem and fall back to an empty ancestry so randomization
+			// still produces sane defaults.
+			errs.Log(errs.New("unable to load default ancestry (Human); using built-in defaults"))
+			anc = &Ancestry{Name: DefaultAncestry}
 		}
 	}
 	return anc
