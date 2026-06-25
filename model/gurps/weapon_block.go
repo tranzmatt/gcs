@@ -80,9 +80,10 @@ func (wb WeaponBlock) Resolve(w *Weapon, modifiersTooltip *xbytes.InsertBuffer) 
 			}
 			preAdj := w.skillLevelBaseAdjustment(entity, primaryTooltip)
 			postAdj := w.skillLevelPostAdjustment(entity, primaryTooltip)
+			replacements := w.NameableReplacements()
 			best := fxp.Min
 			for _, def := range w.Defaults {
-				level := def.SkillLevelFast(entity, w.NameableReplacements(), false, nil, true)
+				level := def.SkillLevelFast(entity, replacements, false, nil, true)
 				if level == fxp.Min {
 					continue
 				}
@@ -108,9 +109,7 @@ func (wb WeaponBlock) Resolve(w *Weapon, modifiersTooltip *xbytes.InsertBuffer) 
 						result.Modifier += amt
 					}
 				}
-				if percentModifier != 0 {
-					result.Modifier += result.Modifier.Mul(percentModifier).Div(fxp.Hundred).Floor()
-				}
+				result.Modifier = addWeaponPercentBonus(result.Modifier, percentModifier)
 				result.Modifier = result.Modifier.Max(0).Floor()
 			} else {
 				result.Modifier = 0

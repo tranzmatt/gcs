@@ -43,9 +43,19 @@ updating:
   (#1035)
 - **Added page reference mapping for *Loadouts: Starship Crew*.** Page references to this book now resolve correctly.
   (#1021)
+- **Export templates can format a trait's self-control and frequency rolls on their own.** Each trait now exposes `CR`
+  and `FR` (the numeric roll, e.g. `12`) and `CRFull` and `FRFull` (the full descriptor, e.g.
+  `12 or less (Resist quite often)`), so a template can render something compact like `CR: 12`. To avoid duplicating
+  these when you place them yourself, the modifier notes are also available with either or both roll lines removed via
+  `ModifierNotesNoCR`, `ModifierNotesNoFR`, and `ModifierNotesNoRolls`. The existing `ModifierNotes` field is unchanged.
+  (#1037)
 
 ## Bug Fixes
 
+- Weapons that default to a technique now also receive the damage and other bonuses granted by the skill the technique
+  is based on, qualified by that base skill's relative level. Previously, for example, learning the Kicking technique
+  caused a Kick to lose the Brawling/Karate damage bonus, since the bonus was matched against the technique instead of
+  the underlying skill. (#767)
 - Fixed how a skill chooses its default when several skills share a name.
 - The Swap Defaults command is now more consistent.
 - Ritual Magic spells now require the Ritual Magic skill for the spell's own college. Previously a Ritual Magic skill
@@ -73,3 +83,14 @@ updating:
 - A pool's State now updates correctly as its current value crosses a threshold. Previously, if the pool's starting
   value was outside every threshold, the State name would never appear even after the value dropped into a threshold's
   range. (#1009)
+- The `Math.exp2(x)` function (base-2 exponentiation, i.e. 2ˣ) is now actually available to scripts. It was meant to be
+  exposed, but due to the way it was registered, calling it raised a `TypeError` instead of returning a value.
+- The `--sync` command-line option now correctly syncs template files and also handles loot files. Previously it loaded
+  each file's library source data but never prepared it for matching, so every item was treated as having no source and
+  nothing was synced for template files; loot files weren't processed at all.
+- Library source files that are edited while GCS is running are now detected and reloaded. Previously, once a source
+  library file had been loaded, later changes to it were ignored until GCS was restarted, leaving the source match
+  status based on the stale, originally loaded data.
+- Edits made in a detail editor after setting nameable substitutions are no longer silently lost. Previously, using the
+  "Set Substitutions" button and then changing something else (such as enabling or disabling a modifier) before saving
+  could discard that later change.

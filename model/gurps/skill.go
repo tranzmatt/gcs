@@ -836,7 +836,7 @@ func CalculateTechniqueLevel(e *Entity, replacements map[string]string, name, sp
 	var tooltip xbytes.InsertBuffer
 	var relativeLevel fxp.Int
 	level := fxp.Min
-	if e != nil {
+	if e != nil && def != nil {
 		if def.DefaultType == SkillID {
 			defName := def.NameWithReplacements(replacements)
 			defSpec := def.SpecializationWithReplacements(replacements)
@@ -1450,6 +1450,11 @@ func (s *SkillNonContainerOnlySyncData) hash(h hash.Hash) {
 // CopyFrom implements node.EditorData.
 func (s *SkillEditData) CopyFrom(other *Skill) {
 	s.copyFrom(&other.SkillEditData, other.Container(), false, other.IsTechnique())
+}
+
+// SetNameableReplacements sets the replacements to be used with Nameables.
+func (s *SkillEditData) SetNameableReplacements(replacements map[string]string) {
+	s.Replacements = replacements
 }
 
 // ApplyTo implements node.EditorData.

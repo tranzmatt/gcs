@@ -672,10 +672,17 @@ func (t *Trait) ActiveModifierFor(name string) *TraitModifier {
 	return found
 }
 
-// ModifierNotes returns the notes due to modifiers.
+// ModifierNotes returns the notes due to modifiers, including the self-control and frequency rolls, if any.
 func (t *Trait) ModifierNotes() string {
+	return t.modifierNotes(true, true)
+}
+
+// modifierNotes returns the notes due to modifiers. The self-control roll and frequency roll lines may be individually
+// suppressed; this is intended for export templates that emit those rolls separately via Trait.SelfControl and
+// Trait.Frequency.
+func (t *Trait) modifierNotes(includeSelfControl, includeFrequency bool) string {
 	var lines []string
-	if t.SelfControl != selfctrl.None {
+	if includeSelfControl && t.SelfControl != selfctrl.None {
 		var buffer strings.Builder
 		buffer.WriteString(i18n.Text("Self-Control Roll (CR): "))
 		buffer.WriteString(t.SelfControl.String())
@@ -685,7 +692,7 @@ func (t *Trait) ModifierNotes() string {
 		}
 		lines = append(lines, buffer.String())
 	}
-	if t.Frequency != frequency.None {
+	if includeFrequency && t.Frequency != frequency.None {
 		lines = append(lines, fmt.Sprintf(i18n.Text("Frequency Roll (FR): %s"), t.Frequency))
 	}
 	var buffer strings.Builder
@@ -966,6 +973,11 @@ func (t *TraitContainerSyncData) hash(h hash.Hash) {
 // CopyFrom implements node.EditorData.
 func (t *TraitEditData) CopyFrom(other *Trait) {
 	t.copyFrom(other.owner, &other.TraitEditData, false)
+}
+
+// SetNameableReplacements sets the replacements to be used with Nameables.
+func (t *TraitEditData) SetNameableReplacements(replacements map[string]string) {
+	t.Replacements = replacements
 }
 
 // ApplyTo implements node.EditorData.

@@ -114,7 +114,8 @@ type Entity struct {
 	features                       features
 	variableResolverExclusions     map[string]bool
 	skillResolverExclusions        map[string]bool
-	scriptCache                    map[scriptResolveKey]string
+	scriptCache                    map[scriptResolveKey]string // not safe for concurrent use on the same entity
+	scriptResolvingDepth           int
 	variableCache                  map[string]string
 	basicLiftCache                 fxp.Weight
 	encumbranceLevelCache          encumbrance.Level
@@ -416,51 +417,7 @@ func (e *Entity) processFeature(owner, subOwner fmt.Stringer, f Feature, leveled
 		e.features.costReductions = append(e.features.costReductions, actual)
 	case *DRBonus:
 		if len(actual.Locations) == 0 { // "this armor"
-			if eqp, ok := owner.(*Equipment); ok {
-				allLocations := make(map[string]struct{})
-				locationsMatched := make(map[string]struct{})
-				for _, f2 := range eqp.FeatureList() {
-					if drBonus, ok2 := f2.(*DRBonus); ok2 && len(drBonus.Locations) != 0 {
-						for _, loc := range drBonus.Locations {
-							allLocations[loc] = struct{}{}
-						}
-						if drBonus.Specialization == actual.Specialization {
-							for _, loc := range drBonus.Locations {
-								locationsMatched[loc] = struct{}{}
-							}
-							additionalDRBonus := DRBonus{
-								DRBonusData: DRBonusData{
-									Type:           feature.DRBonus,
-									Locations:      slices.Clone(drBonus.Locations),
-									Specialization: actual.Specialization,
-									LeveledAmount:  actual.LeveledAmount,
-								},
-							}
-							additionalDRBonus.SetOwner(owner)
-							additionalDRBonus.SetSubOwner(subOwner)
-							additionalDRBonus.SetLeveledOwner(leveledOwner)
-							e.features.drBonuses = append(e.features.drBonuses, &additionalDRBonus)
-						}
-					}
-				}
-				for k := range locationsMatched {
-					delete(allLocations, k)
-				}
-				if len(allLocations) != 0 {
-					additionalDRBonus := DRBonus{
-						DRBonusData: DRBonusData{
-							Type:           feature.DRBonus,
-							Locations:      slices.Sorted(maps.Keys(allLocations)),
-							Specialization: actual.Specialization,
-							LeveledAmount:  actual.LeveledAmount,
-						},
-					}
-					additionalDRBonus.SetOwner(owner)
-					additionalDRBonus.SetSubOwner(subOwner)
-					additionalDRBonus.SetLeveledOwner(leveledOwner)
-					e.features.drBonuses = append(e.features.drBonuses, &additionalDRBonus)
-				}
-			}
+			e.expandThisArmorDRBonus(owner, subOwner, leveledOwner, actual)
 		} else {
 			e.features.drBonuses = append(e.features.drBonuses, actual)
 		}
@@ -480,6 +437,55 @@ func (e *Entity) processFeature(owner, subOwner fmt.Stringer, f Feature, leveled
 		// Not collected at this stage
 	default:
 		errs.Log(errs.New("unhandled feature"), "type", f.FeatureType())
+	}
+}
+
+// expandThisArmorDRBonus handles a DR bonus that specifies no locations (a "this armor" bonus). Such a bonus applies to
+// whatever locations the owning piece of equipment already grants DR to, so we resolve those locations by scanning the
+// equipment's other DR bonuses: locations covered by a bonus with a matching specialization receive a copy carrying
+// that same specialization, and any remaining covered locations receive a single combined copy. If the owner isn't a
+// piece of equipment, the bonus is dropped, since there is nothing for it to attach to.
+func (e *Entity) expandThisArmorDRBonus(owner, subOwner fmt.Stringer, leveledOwner LeveledOwner, src *DRBonus) {
+	eqp, ok := owner.(*Equipment)
+	if !ok {
+		return
+	}
+	add := func(locations []string) {
+		bonus := &DRBonus{
+			DRBonusData: DRBonusData{
+				Type:           feature.DRBonus,
+				Locations:      locations,
+				Specialization: src.Specialization,
+				LeveledAmount:  src.LeveledAmount,
+			},
+		}
+		bonus.SetOwner(owner)
+		bonus.SetSubOwner(subOwner)
+		bonus.SetLeveledOwner(leveledOwner)
+		e.features.drBonuses = append(e.features.drBonuses, bonus)
+	}
+	allLocations := make(map[string]struct{})
+	locationsMatched := make(map[string]struct{})
+	for _, f := range eqp.FeatureList() {
+		drBonus, ok2 := f.(*DRBonus)
+		if !ok2 || len(drBonus.Locations) == 0 {
+			continue
+		}
+		for _, loc := range drBonus.Locations {
+			allLocations[loc] = struct{}{}
+		}
+		if drBonus.Specialization == src.Specialization {
+			for _, loc := range drBonus.Locations {
+				locationsMatched[loc] = struct{}{}
+			}
+			add(slices.Clone(drBonus.Locations))
+		}
+	}
+	for k := range locationsMatched {
+		delete(allLocations, k)
+	}
+	if len(allLocations) != 0 {
+		add(slices.Sorted(maps.Keys(allLocations)))
 	}
 }
 
@@ -834,10 +840,7 @@ func (e *Entity) SkillBonusFor(name, specialization, optionalSpecialization stri
 	var total fxp.Int
 	for _, bonus := range e.features.skillBonuses {
 		if bonus.SelectionType == skillsel.Name {
-			var replacements map[string]string
-			if na, ok := bonus.Owner().(nameable.Accesser); ok {
-				replacements = na.NameableReplacements()
-			}
+			replacements := bonusReplacements(bonus)
 			if bonus.NameCriteria.Matches(replacements, name) &&
 				bonus.SpecializationCriteria.Matches(replacements, specialization) &&
 				bonus.OptionalSpecializationCriteria.Matches(replacements, optionalSpecialization) &&
@@ -854,10 +857,7 @@ func (e *Entity) SkillBonusFor(name, specialization, optionalSpecialization stri
 func (e *Entity) SkillPointBonusFor(name, specialization, optionalSpecialization string, tags []string, tooltip *xbytes.InsertBuffer) fxp.Int {
 	var total fxp.Int
 	for _, bonus := range e.features.skillPointBonuses {
-		var replacements map[string]string
-		if na, ok := bonus.Owner().(nameable.Accesser); ok {
-			replacements = na.NameableReplacements()
-		}
+		replacements := bonusReplacements(bonus)
 		if bonus.NameCriteria.Matches(replacements, name) &&
 			bonus.SpecializationCriteria.Matches(replacements, specialization) &&
 			bonus.OptionalSpecializationCriteria.Matches(replacements, optionalSpecialization) &&
@@ -873,10 +873,7 @@ func (e *Entity) SkillPointBonusFor(name, specialization, optionalSpecialization
 func (e *Entity) SpellBonusFor(name, powerSource string, colleges, tags []string, tooltip *xbytes.InsertBuffer) fxp.Int {
 	var total fxp.Int
 	for _, bonus := range e.features.spellBonuses {
-		var replacements map[string]string
-		if na, ok := bonus.Owner().(nameable.Accesser); ok {
-			replacements = na.NameableReplacements()
-		}
+		replacements := bonusReplacements(bonus)
 		if bonus.TagsCriteria.MatchesList(replacements, tags...) &&
 			bonus.MatchForType(replacements, name, powerSource, colleges) {
 			total += bonus.AdjustedAmount()
@@ -890,10 +887,7 @@ func (e *Entity) SpellBonusFor(name, powerSource string, colleges, tags []string
 func (e *Entity) SpellPointBonusFor(name, powerSource string, colleges, tags []string, tooltip *xbytes.InsertBuffer) fxp.Int {
 	var total fxp.Int
 	for _, bonus := range e.features.spellPointBonuses {
-		var replacements map[string]string
-		if na, ok := bonus.Owner().(nameable.Accesser); ok {
-			replacements = na.NameableReplacements()
-		}
+		replacements := bonusReplacements(bonus)
 		if bonus.TagsCriteria.MatchesList(replacements, tags...) &&
 			bonus.MatchForType(replacements, name, powerSource, colleges) {
 			total += bonus.AdjustedAmount()
@@ -907,10 +901,7 @@ func (e *Entity) SpellPointBonusFor(name, powerSource string, colleges, tags []s
 func (e *Entity) TraitBonusFor(name string, tags []string, tooltip *xbytes.InsertBuffer) fxp.Int {
 	var total fxp.Int
 	for _, bonus := range e.features.traitBonuses {
-		var replacements map[string]string
-		if na, ok := bonus.Owner().(nameable.Accesser); ok {
-			replacements = na.NameableReplacements()
-		}
+		replacements := bonusReplacements(bonus)
 		if bonus.NameCriteria.Matches(replacements, name) &&
 			bonus.TagsCriteria.MatchesList(replacements, tags...) {
 			total += bonus.AdjustedAmount()
@@ -936,10 +927,7 @@ func (e *Entity) AddWeaponWithSkillBonusesFor(name, specialization, usage string
 		if allowedFeatureTypes[bonus.Type] &&
 			bonus.SelectionType == wsel.WithRequiredSkill &&
 			bonus.RelativeLevelCriteria.Matches(rsl) {
-			var replacements map[string]string
-			if na, ok := bonus.Owner().(nameable.Accesser); ok {
-				replacements = na.NameableReplacements()
-			}
+			replacements := bonusReplacements(bonus)
 			if bonus.NameCriteria.Matches(replacements, name) &&
 				bonus.SpecializationCriteria.Matches(replacements, specialization) &&
 				bonus.UsageCriteria.Matches(replacements, usage) &&
@@ -960,10 +948,7 @@ func (e *Entity) AddNamedWeaponBonusesFor(nameQualifier, usageQualifier string, 
 	for _, bonus := range e.features.weaponBonuses {
 		if allowedFeatureTypes[bonus.Type] &&
 			bonus.SelectionType == wsel.WithName {
-			var replacements map[string]string
-			if na, ok := bonus.Owner().(nameable.Accesser); ok {
-				replacements = na.NameableReplacements()
-			}
+			replacements := bonusReplacements(bonus)
 			if bonus.NameCriteria.Matches(replacements, nameQualifier) &&
 				bonus.SpecializationCriteria.Matches(replacements, usageQualifier) &&
 				bonus.TagsCriteria.MatchesList(replacements, tagsQualifier...) {
@@ -975,13 +960,10 @@ func (e *Entity) AddNamedWeaponBonusesFor(nameQualifier, usageQualifier string, 
 }
 
 func addWeaponBonusToMap(bonus *WeaponBonus, dieCount int, tooltip *xbytes.InsertBuffer, m map[*WeaponBonus]bool) {
-	savedLeveledOwner := bonus.LeveledOwner
-	savedDieCount := bonus.DieCount
-	bonus.DieCount = fxp.FromInteger(dieCount)
-	bonus.LeveledOwner = bonus.DerivedLeveledOwner()
-	bonus.AddToTooltip(tooltip)
-	bonus.LeveledOwner = savedLeveledOwner
-	bonus.DieCount = savedDieCount
+	if m[bonus] {
+		return
+	}
+	bonus.addToTooltip(bonus.adjustedAmount(fxp.FromInteger(dieCount), bonus.DerivedLeveledOwner()), tooltip)
 	m[bonus] = true
 }
 
@@ -990,10 +972,7 @@ func (e *Entity) NamedWeaponSkillBonusesFor(name, usage string, tags []string, t
 	var bonuses []*SkillBonus
 	for _, bonus := range e.features.skillBonuses {
 		if bonus.SelectionType == skillsel.WeaponsWithName {
-			var replacements map[string]string
-			if na, ok := bonus.Owner().(nameable.Accesser); ok {
-				replacements = na.NameableReplacements()
-			}
+			replacements := bonusReplacements(bonus)
 			if bonus.NameCriteria.Matches(replacements, name) &&
 				bonus.SpecializationCriteria.Matches(replacements, usage) &&
 				bonus.TagsCriteria.MatchesList(replacements, tags...) {
@@ -1442,42 +1421,42 @@ func (e *Entity) SetWeapons(_ bool, _ []*Weapon) {
 	// Not permitted
 }
 
-// Reactions returns the current set of reactions.
-func (e *Entity) Reactions() []*ConditionalModifier {
+// gatherConditionalModifiers walks the entity, collecting conditional modifiers (or reactions) into a sorted list.
+// collectFromList extracts the relevant bonuses from a feature list into the working map, and perTrait, if non-nil,
+// contributes any additional per-trait modifiers (used for self-control reaction penalties). Reactions and
+// ConditionalModifiers share this traversal so their selection of nodes and merge ordering stay identical.
+func (e *Entity) gatherConditionalModifiers(
+	collectFromList func(source string, features Features, m map[string]*ConditionalModifier),
+	perTrait func(source string, t *Trait, m map[string]*ConditionalModifier),
+) []*ConditionalModifier {
 	m := make(map[string]*ConditionalModifier)
 	Traverse(func(t *Trait) bool {
 		source := i18n.Text("from trait ") + t.String()
 		if !t.Container() {
-			e.reactionsFromFeatureList(source, t.Features, m)
+			collectFromList(source, t.Features, m)
 		}
 		Traverse(func(mod *TraitModifier) bool {
-			e.reactionsFromFeatureList(source, mod.Features, m)
+			collectFromList(source, mod.Features, m)
 			return false
 		}, true, true, t.Modifiers...)
-		if t.SelfControl != selfctrl.None && t.SelfControlAdj == selfctrl.ReactionPenalty {
-			amt := fxp.FromInteger(selfctrl.ReactionPenalty.Adjustment(t.SelfControl))
-			situation := fmt.Sprintf(i18n.Text("from others when %s is triggered"), t.String())
-			if r, exists := m[situation]; exists {
-				r.Add(source, amt)
-			} else {
-				m[situation] = NewConditionalModifier(source, situation, amt)
-			}
+		if perTrait != nil {
+			perTrait(source, t, m)
 		}
 		return false
 	}, true, false, e.Traits...)
 	Traverse(func(eqp *Equipment) bool {
 		if eqp.ReallyEquipped() {
 			source := i18n.Text("from equipment ") + eqp.NameWithReplacements()
-			e.reactionsFromFeatureList(source, eqp.Features, m)
+			collectFromList(source, eqp.Features, m)
 			Traverse(func(mod *EquipmentModifier) bool {
-				e.reactionsFromFeatureList(source, mod.Features, m)
+				collectFromList(source, mod.Features, m)
 				return false
 			}, true, true, eqp.Modifiers...)
 		}
 		return false
 	}, false, false, e.CarriedEquipment...)
 	Traverse(func(sk *Skill) bool {
-		e.reactionsFromFeatureList(i18n.Text("from skill ")+sk.String(), sk.Features, m)
+		collectFromList(i18n.Text("from skill ")+sk.String(), sk.Features, m)
 		return false
 	}, false, true, e.Skills...)
 	list := make([]*ConditionalModifier, 0, len(m))
@@ -1488,6 +1467,22 @@ func (e *Entity) Reactions() []*ConditionalModifier {
 	return list
 }
 
+// Reactions returns the current set of reactions.
+func (e *Entity) Reactions() []*ConditionalModifier {
+	return e.gatherConditionalModifiers(e.reactionsFromFeatureList,
+		func(source string, t *Trait, m map[string]*ConditionalModifier) {
+			if t.SelfControl != selfctrl.None && t.SelfControlAdj == selfctrl.ReactionPenalty {
+				amt := fxp.FromInteger(selfctrl.ReactionPenalty.Adjustment(t.SelfControl))
+				situation := fmt.Sprintf(i18n.Text("from others when %s is triggered"), t.String())
+				if r, exists := m[situation]; exists {
+					r.Add(source, amt)
+				} else {
+					m[situation] = NewConditionalModifier(source, situation, amt)
+				}
+			}
+		})
+}
+
 func (e *Entity) reactionsFromFeatureList(source string, features Features, m map[string]*ConditionalModifier) {
 	for _, f := range features {
 		bonus, ok := f.(*ReactionBonus)
@@ -1495,11 +1490,7 @@ func (e *Entity) reactionsFromFeatureList(source string, features Features, m ma
 			continue
 		}
 		amt := bonus.AdjustedAmount()
-		var replacements map[string]string
-		var na nameable.Accesser
-		if na, ok = bonus.Owner().(nameable.Accesser); ok {
-			replacements = na.NameableReplacements()
-		}
+		replacements := bonusReplacements(bonus)
 		situation := nameable.Apply(bonus.Situation, replacements)
 		if r, exists := m[situation]; exists {
 			r.Add(source, amt)
@@ -1511,39 +1502,7 @@ func (e *Entity) reactionsFromFeatureList(source string, features Features, m ma
 
 // ConditionalModifiers returns the current set of conditional modifiers.
 func (e *Entity) ConditionalModifiers() []*ConditionalModifier {
-	m := make(map[string]*ConditionalModifier)
-	Traverse(func(t *Trait) bool {
-		source := i18n.Text("from trait ") + t.String()
-		if !t.Container() {
-			e.conditionalModifiersFromFeatureList(source, t.Features, m)
-		}
-		Traverse(func(mod *TraitModifier) bool {
-			e.conditionalModifiersFromFeatureList(source, mod.Features, m)
-			return false
-		}, true, true, t.Modifiers...)
-		return false
-	}, true, false, e.Traits...)
-	Traverse(func(eqp *Equipment) bool {
-		if eqp.ReallyEquipped() {
-			source := i18n.Text("from equipment ") + eqp.NameWithReplacements()
-			e.conditionalModifiersFromFeatureList(source, eqp.Features, m)
-			Traverse(func(mod *EquipmentModifier) bool {
-				e.conditionalModifiersFromFeatureList(source, mod.Features, m)
-				return false
-			}, true, true, eqp.Modifiers...)
-		}
-		return false
-	}, false, false, e.CarriedEquipment...)
-	Traverse(func(sk *Skill) bool {
-		e.conditionalModifiersFromFeatureList(i18n.Text("from skill ")+sk.String(), sk.Features, m)
-		return false
-	}, false, true, e.Skills...)
-	list := make([]*ConditionalModifier, 0, len(m))
-	for _, v := range m {
-		list = append(list, v)
-	}
-	slices.SortFunc(list, func(a, b *ConditionalModifier) int { return a.Compare(b) })
-	return list
+	return e.gatherConditionalModifiers(e.conditionalModifiersFromFeatureList, nil)
 }
 
 func (e *Entity) conditionalModifiersFromFeatureList(source string, features Features, m map[string]*ConditionalModifier) {
@@ -1553,11 +1512,7 @@ func (e *Entity) conditionalModifiersFromFeatureList(source string, features Fea
 			continue
 		}
 		amt := bonus.AdjustedAmount()
-		var replacements map[string]string
-		var na nameable.Accesser
-		if na, ok = bonus.Owner().(nameable.Accesser); ok {
-			replacements = na.NameableReplacements()
-		}
+		replacements := bonusReplacements(bonus)
 		situation := nameable.Apply(bonus.Situation, replacements)
 		if r, exists := m[situation]; exists {
 			r.Add(source, amt)
