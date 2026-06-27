@@ -31,7 +31,6 @@ var (
 	TooltipDismissalDef        = fxp.Sixty
 	TooltipDismissalMin        = fxp.One
 	TooltipDismissalMax        = fxp.ThirtySixHundred
-	ScrollWheelMultiplierDef   = fxp.FromFloat(unison.MouseWheelMultiplier)
 	ScrollWheelMultiplierMin   = fxp.One
 	ScrollWheelMultiplierMax   = fxp.TenThousandMinusOne
 	PermittedScriptExecTimeDef = fxp.FromStringForced("0.05")
@@ -61,7 +60,7 @@ const (
 	MaximumAutoColWidthDef     = 800
 )
 
-const currentGeneralSettingsVersion = 1
+const currentGeneralSettingsVersion = 2
 
 // GeneralSettings holds general settings for a sheet.
 type GeneralSettings struct {
@@ -91,6 +90,7 @@ type GeneralSettings struct {
 	GroupContainersOnSort       bool             `json:"group_containers_on_sort"`
 	InitialFieldClickSelectsAll bool             `json:"initial_field_click_selects_all"`
 	RestoreWorkspaceOnStart     bool             `json:"restore_workspace_on_start"`
+	ExpandPageReferences        bool             `json:"expand_page_references"`
 }
 
 // NewGeneralSettings creates settings with factory defaults.
@@ -117,6 +117,7 @@ func NewGeneralSettings() *GeneralSettings {
 		AutoFillProfile:            true,
 		AutoAddNaturalAttacks:      true,
 		RestoreWorkspaceOnStart:    true,
+		ExpandPageReferences:       true,
 	}
 }
 
@@ -178,8 +179,14 @@ func (s *GeneralSettings) MonitorPPI() int {
 // EnsureValidity checks the current settings for validity and if they aren't valid, makes them so.
 func (s *GeneralSettings) EnsureValidity() {
 	if s.Version != currentGeneralSettingsVersion {
-		// Adjust from old default of 150% to new default of 100%
-		s.InitialSheetUIScale = s.InitialSheetUIScale * 100 / 150
+		if s.Version < 1 {
+			// Adjust from old default of 150% to new default of 100%
+			s.InitialSheetUIScale = s.InitialSheetUIScale * 100 / 150
+		}
+		if s.Version < 2 {
+			// This setting didn't exist before, so enable it to match the new default behavior.
+			s.ExpandPageReferences = true
+		}
 		s.Version = currentGeneralSettingsVersion
 	}
 	s.InitialPoints = fxp.ResetIfOutOfRange(s.InitialPoints, InitialPointsMin, InitialPointsMax, InitialPointsDef)
@@ -189,7 +196,7 @@ func (s *GeneralSettings) EnsureValidity() {
 	s.PermittedPerScriptExecTime = fxp.ResetIfOutOfRange(s.PermittedPerScriptExecTime, PermittedScriptExecTimeMin,
 		PermittedScriptExecTimeMax, PermittedScriptExecTimeDef)
 	s.ScrollWheelMultiplier = fxp.ResetIfOutOfRange(s.ScrollWheelMultiplier, ScrollWheelMultiplierMin,
-		ScrollWheelMultiplierMax, ScrollWheelMultiplierDef)
+		ScrollWheelMultiplierMax, fxp.FromFloat(unison.MouseWheelMultiplier))
 	if s.MonitorResolution != 0 {
 		s.MonitorResolution = fxp.ResetIfOutOfRange(s.MonitorResolution, MonitorResolutionMin, MonitorResolutionMax, 0)
 	}

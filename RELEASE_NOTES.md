@@ -35,6 +35,11 @@ updating:
 - **External PDF viewers now jump to the searched text.** When you open a page reference in an external PDF viewer, GCS
   passes the highlighted phrase along (via the `$TEXT` placeholder) so a viewer that supports it can navigate directly
   to the term. (#1023)
+- **Page reference columns can show more than one reference.** Page reference columns now display as many of an item's
+  page references as will fit, each individually clickable, instead of always collapsing to the first one followed by a
+  "+". A new General Setting, "Show additional page references when space allows," controls this for character sheets,
+  loot sheets, and templates and is on by default. Standalone list windows are unaffected by the setting, since their
+  columns can already be resized directly. (#1046)
 - **Metric length now converts at 25 mm per inch.** Lengths entered in metric units convert using the GURPS simplified
   value of 25 mm per inch, replacing the previous conversion of 1 m per yard. (#1032)
 - **Improved hiking calculations in the Calculator.** Hiking distance now follows the clarification in HT55, the daily
@@ -43,14 +48,10 @@ updating:
   (#1035)
 - **Added page reference mapping for *Loadouts: Starship Crew*.** Page references to this book now resolve correctly.
   (#1021)
-- **Export templates can format a trait's self-control and frequency rolls on their own.** Each trait now exposes `CR`
-  and `FR` (the numeric roll, e.g. `12`) and `CRFull` and `FRFull` (the full descriptor, e.g.
-  `12 or less (Resist quite often)`), so a template can render something compact like `CR: 12`. To avoid duplicating
-  these when you place them yourself, the modifier notes are also available with either or both roll lines removed via
-  `ModifierNotesNoCR`, `ModifierNotesNoFR`, and `ModifierNotesNoRolls`. The existing `ModifierNotes` field is unchanged.
-  (#1037)
-- **Export templates can now access a trait's level.** Leveled traits now expose `Level`. This will be -1 for containers
-  and non-leveled traits.
+- **Export templates can now export more data.** New keys have been added. See the Export Templates documentation for
+  details.
+- **Scripting has access to more data.** New fields and objects have been added. See the Scripting Guide for details.
+- **Added additional page reference codes.**
 
 ## Bug Fixes
 
